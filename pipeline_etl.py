@@ -13,6 +13,8 @@ import pandas as pd
 import numpy as np
 from sklearn.datasets import fetch_openml
 from ydata_profiling import ProfileReport
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
 
 
 # ======================================================================
@@ -212,6 +214,38 @@ def execute_relational_cleaning_pipeline(db_name="scor_portfolio_management.db")
     print(f"      • Log-normalized mean    : {avg_log}")
 
 
+def run_unsupervised_segmentation(db_name="scor_portfolio_management.db"):
+    """Pulls clean production tables, runs an inline scaling track, and commits K-Means risk segment tags."""
+    print(f"🧩 Production Analytics: Executing K-Means clustering track on '{db_name}'...")
+    conn = sqlite3.connect(db_name)
+    df = pd.read_sql_query("SELECT * FROM analytics_portfolio_ready", conn)
+    
+    # Isolate exposure columns
+    exposure_cols = [col for col in df.columns if col.startswith('cont')]
+    X = df[exposure_cols]
+    
+    # Scale features to guarantee geometric balance
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    # Segment data mathematically into 3 distinct operational buckets
+    kmeans = KMeans(n_clusters=3, random_state=42, n_init='auto')
+    df['RiskSegmentID'] = kmeans.fit_predict(X_scaled)
+    
+    # Re-save the matrix to the SQL database with the fresh feature column intact
+    df.to_sql("analytics_portfolio_ready", conn, if_exists="replace", index=False)
+    
+    # Run a quick internal count validation
+    cursor = conn.cursor()
+    cursor.execute("SELECT RiskSegmentID, COUNT(*) FROM analytics_portfolio_ready GROUP BY RiskSegmentID;")
+    counts = cursor.fetchall()
+    conn.close()
+    
+    print("✅ Unsupervised Segmentation Locked. Distribution map verified:")
+    for cluster_id, count in counts:
+        print(f"   • Cluster {cluster_id} → {count:,} records.")
+
+
 # ======================================================================
 # MAIN EXECUTION ENTRY POINT
 # ======================================================================
@@ -228,8 +262,11 @@ if __name__ == "__main__":
     # Step 3: Stage raw data into SQLite
     stage_raw_portfolio(raw_dataframe)
 
-    # Step 4: Transform, normalize, and index
+    # Step 4: Transform, normalize, and index (Phase 2)
     execute_relational_cleaning_pipeline()
+    
+    # Step 5: Unsupervised Clustering & Feature Engineering (Phase 3)
+    run_unsupervised_segmentation()
 
     elapsed = time.time() - pipeline_start
     print(f"\n🎉 Pipeline complete. Total runtime: {elapsed:.2f} seconds.")
